@@ -1,0 +1,271 @@
+---
+title: "Auswertung Kongruenzstudie"
+author: "Elenea Wieland und Oliver Schallert"
+date: "17.05.23"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Pakete und Daten
+
+```{r, message= FALSE}
+library(dplyr)
+library(tidyr)
+library(car)
+library(lme4)
+library(ggplot2)
+library(Hmisc)
+library(cAIC4)
+```
+
+## Daten einlesen und bereinigen
+
+```{r}
+daten <- read.csv("/Users/uetzelsche/Desktop/2023-04-Datensatz.csv", sep=";", row.names=,1, na.strings="")
+
+daten_kongruenz <- daten %>%
+  select(CASE, matches("[FIS][ABCDEFHGIJKL]")) %>%
+  select(!c(2, 111:115)) %>%
+  select(!2:13)
+
+# Daten ins Long-Format konvertieren
+
+daten_kongruenz_mod <- pivot_longer(daten_kongruenz, starts_with("S"), names_to = "Bedingung", values_to = "Bewertung")
+```
+
+NAs aussortieren, Items aus den einzelnen Bedingungen herauslösen, Bedingungen separieren und rekodieren.
+
+```{r}
+daten_kongruenz_mod <- drop_na(daten_kongruenz_mod)
+
+daten_kongruenz_mod$Item <- substr(daten_kongruenz_mod$Bedingung, 2, 2)
+
+daten_kongruenz_mod$Bedingung <- substr(daten_kongruenz_mod$Bedingung, 4, 4) 
+
+bedingung_nr <- as.numeric(daten_kongruenz_mod$Bedingung)
+
+bedingungen <- c("SV.Sg.adj", "SV.Pl.adj", "VS.Sg.adj", "VS.Pl.adj", "SV.Sg.dist", "SV.Pl.dist", "VS.Sg.dist", "VS.Pl.dist")
+
+daten_kongruenz_mod$Bedingung <- bedingungen[bedingung_nr]
+```
+
+Bedingung in drei Spalten aufteilen und Spaltenreihenfolge ändern; jeweils als Faktoren rekodieren.
+
+```{r}
+daten_kongruenz_mod <- separate(daten_kongruenz_mod, "Bedingung", into=c("Wortstellung", "Kongruenz", "Distanz"))
+
+col_abfolge <- c("CASE", "Item", "Wortstellung", "Kongruenz", "Distanz", "Bewertung")
+
+daten_kongruenz_mod <- daten_kongruenz_mod[, col_abfolge] 
+
+daten_kongruenz_mod$Wortstellung <- factor(daten_kongruenz_mod$Wortstellung)
+
+daten_kongruenz_mod$Kongruenz <- factor(daten_kongruenz_mod$Kongruenz)
+
+daten_kongruenz_mod$Distanz <- factor(daten_kongruenz_mod$Distanz)
+
+daten_kongruenz_mod$Item <- factor(daten_kongruenz_mod$Item)
+```
+
+Teilstudien aus dem Datensatz herauslösen.
+
+```{r}
+
+zweifelsfall1 <- filter(daten_kongruenz_mod, Item %in% c("A", "B", "C", "D")) 
+
+zweifelsfall2 <- filter(daten_kongruenz_mod, Item %in% c("E", "F", "G", "H")) 
+
+zweifelsfall3 <- filter(daten_kongruenz_mod, Item %in% c("I", "J", "K", "L")) 
+```
+
+## Deskriptive Auswertung
+
+Tabellen mit Mittelwerten der Bewertungen nach Bedingungen erzeugen. Man kann das noch schöner machen (mit Standardabweichung usw.).
+
+```{r}
+tab_zweifelsfall1 <- xtabs(Bewertung ~ Wortstellung + Kongruenz + Distanz, aggregate(Bewertung ~ Wortstellung + Kongruenz + Distanz, zweifelsfall1, mean)) 
+
+tab_zweifelsfall2 <- xtabs(Bewertung ~ Wortstellung + Kongruenz + Distanz, aggregate(Bewertung ~ Wortstellung + Kongruenz + Distanz, zweifelsfall2, mean)) 
+
+tab_zweifelsfall3 <- xtabs(Bewertung ~ Wortstellung + Kongruenz + Distanz, aggregate(Bewertung ~ Wortstellung + Kongruenz + Distanz, zweifelsfall3, mean)) 
+
+tab_zweifelsfall1 
+tab_zweifelsfall2 
+tab_zweifelsfall3 
+```
+
+## Statistische Auswertung
+
+Statistische Analyse mittels gemischtem linearen Modell. Wir führen zuerst eine Kontrastkodierung der Daten durch. In einem nächsten Schritt passen wir Modelle für die drei Teilstudien an. Wir verwenden jeweils maximale Modelle mit `Bewertung ~ Wortstellung + Kongruenz + Distanz` als fixen Effekten und `Item` und Versuchsperson (`CASE`) als zufälligen Effekten. 
+
+```{r}
+
+contrasts(daten_kongruenz_mod$Wortstellung) <- contr.Sum(levels(daten_kongruenz_mod$Wortstellung))
+
+contrasts(daten_kongruenz_mod$Kongruenz) <- contr.Sum(levels(daten_kongruenz_mod$Kongruenz))
+
+contrasts(daten_kongruenz_mod$Distanz) <- contr.Sum(levels(daten_kongruenz_mod$Distanz))
+```
+
+### Teilstudie 1 (Zweifelsfall 1)
+
+Wir passen zuerst ein Maximalmodell an (`modell_zweifelsfall1`). Eine Prüfung der Modellgüte in Bezug auf die zufälligen Faktoren (Rückwärtsselektion modulo AIC) deutet darauf hin, dass einfachere Modelle nicht besser abschneiden. Siehe dazu die Dokumentation zum Paket [cAIC4](https://www.rdocumentation.org/packages/cAIC4/versions/1.0/topics/stepcAIC).
+
+```{r}
+
+modell_zweifelsfall1 <- lmer(Bewertung ~ Wortstellung + Kongruenz + Distanz + (1|Item) + (1|CASE), zweifelsfall1, REML= TRUE)
+
+summary(modell_zweifelsfall1)
+Anova(modell_zweifelsfall1)
+
+zweifelsfall1$FittedBewertung <- fitted(modell_zweifelsfall1)
+
+modell_zweifelsfall1_step <- stepcAIC(modell_zweifelsfall1, direction = "backward", trace = TRUE, data = zweifelsfall1)
+```
+
+### Teilstudie 2 (Zweifelsfall 2)
+
+Wir passen wiederum zuerst ein Maximalmodell an (`modell_zweifelsfall1`). Eine Prüfung der Modellgüte (Rückwärtsselektion modulo AIC) deutet darauf hin, dass wir Item als zufälligen Faktor verwerfen können. Aus inhaltlichen Überlegungen sollte diese Entscheidung aber kritisch hinterfragt werden. Insbesondere wäre zu schauen, ob es Interaktionen zwischen den zufälligen Faktoren gibt. Das kann man z.B. mit folgenden Term im `lmer`-Objekt spezifizieren: `(1|CASE:Item)`.
+
+```{r}
+modell_zweifelsfall2 <- lmer(Bewertung ~ Wortstellung + Kongruenz + Distanz + (1|Item) + (1|CASE), zweifelsfall2, REML= TRUE)
+
+summary(modell_zweifelsfall2)
+Anova(modell_zweifelsfall2)
+
+modell_zweifelsfall2_step <- stepcAIC(modell_zweifelsfall2, direction = "backward", trace = TRUE, data = zweifelsfall2)
+
+modell_zweifelsfall2_mod <- lmer(Bewertung ~ Wortstellung + Kongruenz + Distanz + (1|CASE), zweifelsfall2, REML= TRUE)
+
+zweifelsfall2$FittedBewertung <- fitted(modell_zweifelsfall2_mod)
+
+summary(modell_zweifelsfall2_mod)
+Anova(modell_zweifelsfall2_mod)
+```
+
+### Teilstudie 3 (Zweifelsfall 3)
+
+Wir passen zuerst ein Maximalmodell an (`modell_zweifelsfall1`). Eine Prüfung der Modellgüte in Bezug auf die zufälligen Faktoren (Rückwärtsselektion modulo AIC) deutet darauf hin, dass einfachere Modelle nicht besser abschneiden.
+
+```{r}
+zweifelsfall2$FittedBewertung <- fitted(modell_zweifelsfall2)
+
+modell_zweifelsfall3 <- lmer(Bewertung ~ Wortstellung + Kongruenz + Distanz + (1|Item) + (1|CASE), zweifelsfall3, REML= TRUE)
+
+summary(modell_zweifelsfall3)
+Anova(modell_zweifelsfall3)
+
+zweifelsfall3$FittedBewertung <- fitted(modell_zweifelsfall3)
+
+modell_zweifelsfall3_step <- stepcAIC(modell_zweifelsfall3, direction = "backward", trace = TRUE, data = zweifelsfall3)
+```
+
+## Daten plotten
+
+Plots zu den drei Teilstudien, und zwar zuerst zur Modellgüte (gefittete vs. beobachtete Daten), dann zu allen Effekten.
+
+### Teilstudie 1 (Zweifelsfall 1)
+
+```{r}
+modell_fit_zweifelsfall1 <-
+  ggplot(zweifelsfall1, aes(x=Kongruenz, y=Bewertung)) + 
+  stat_summary(aes(color="observed"), fun.data=mean_cl_boot) +
+  stat_summary(aes(y=FittedBewertung, color="model"), fun.data=mean_cl_boot) + facet_grid(Wortstellung ~ Kongruenz ~ Distanz) + xlab("Kongruenz") + ylab("Bewertung") + scale_color_discrete(name  ="Modellgüte", breaks=c("model", "observed"), labels=c("Modell", "Daten"))
+
+alle_effekte_zweifelsfall1 <- 
+  ggplot(zweifelsfall1, aes(x=Kongruenz, y=Bewertung, color=Wortstellung)) + stat_summary(fun.data=mean_cl_boot) + facet_wrap(~Distanz) + xlab("Kongruenz") + ylab("Bewertung") + ylim(0, 4)
+
+modell_fit_zweifelsfall1
+alle_effekte_zweifelsfall1
+```
+
+### Teilstudie 2 (Zweifelsfall 2)
+
+```{r}
+modell_fit_zweifelsfall2 <-
+  ggplot(zweifelsfall2, aes(x=Kongruenz, y=Bewertung)) + 
+  stat_summary(aes(color="observed"), fun.data=mean_cl_boot) +
+  stat_summary(aes(y=FittedBewertung, color="model"), fun.data=mean_cl_boot) + facet_grid(Wortstellung ~ Kongruenz ~ Distanz) + xlab("Kongruenz") + ylab("Bewertung") + scale_color_discrete(name  ="Modellgüte", breaks=c("model", "observed"), labels=c("Modell", "Daten")) 
+
+alle_effekte_zweifelsfall2 <- 
+  ggplot(zweifelsfall2, aes(x=Kongruenz, y=Bewertung, color=Wortstellung)) + stat_summary(fun.data=mean_cl_boot) + facet_wrap(~Distanz) + xlab("Kongruenz") + ylab("Bewertung") + ylim(0, 4)
+
+modell_fit_zweifelsfall2
+alle_effekte_zweifelsfall2
+```
+
+### Teilstudie 3 (Zweifelsfall 3)
+
+```{r}
+modell_fit_zweifelsfall3 <-
+  ggplot(zweifelsfall3, aes(x=Kongruenz, y=Bewertung)) + 
+  stat_summary(aes(color="observed"), fun.data=mean_cl_boot) +
+  stat_summary(aes(y=FittedBewertung, color="model"), fun.data=mean_cl_boot) + facet_grid(Wortstellung ~ Kongruenz ~ Distanz) + xlab("Kongruenz") + ylab("Bewertung") + scale_color_discrete(name  ="Modellgüte", breaks=c("model", "observed"), labels=c("Modell", "Daten"))   
+
+alle_effekte_zweifelsfall3 <- 
+  ggplot(zweifelsfall3, aes(x=Kongruenz, y=Bewertung, color=Wortstellung)) + stat_summary(fun.data=mean_cl_boot) + facet_wrap(~Distanz) + xlab("Kongruenz") + ylab("Bewertung") + ylim(0, 4)
+
+modell_fit_zweifelsfall3
+alle_effekte_zweifelsfall3
+```
+
+Codeschnipsel für das Plotten einzelner Effekte und zum Speichern der Plots:
+
+```{r, eval = FALSE}
+einzelne_effekte_zweifelsfall1 <- 
+  ggplot(subset(zweifelsfall1, Distanz=='adj'), aes(x=Kongruenz, y=Bewertung, color=Wortstellung)) + stat_summary(fun.data=mean_cl_boot) + xlab("Kongruenz") + ylab("Bewertung") + ylim(0, 4)
+
+# Working directory anpassen (müssen Sie entsprechend ändern)
+
+setwd("/Users/uetzelsche/Desktop")
+
+alle_effekte_zweifelsfall1
+quartz.save("zweifelfall1.png","png", dpi = 150) 
+
+modell_fit_zweifelsfall1
+quartz.save("fit_zweifelfall1.png","png", dpi = 150)
+```
+
+## Appendix: Mass- vs. Count-Nomen
+
+In Teilstudie 1 wurden auch Mass- und Count-Nomen systematisch variiert, so dass wir diesen Faktor zusätzlich berücksichtigen können. Items `SA` und `SC` im Originaldatensatz sind Massenomen, Items `SB` und `SD` sind Zählnomen. Da `Item` nun als fixer Effekt betrachtet wird, nehmen wir nur `CASE` als zufälligen Effekt
+
+```{r}
+zweifelsfall1_alternativ <- filter(daten_kongruenz_mod, Item %in% c("A", "B", "C", "D")) 
+
+zweifelsfall1_alternativ <-
+  zweifelsfall1_alternativ %>%
+  mutate(Quantifikation = as.factor(ifelse(Item == 'A' | Item == 'C', "mass", ifelse(Item == 'B' | Item == 'D', "count", NA)))) %>%
+  drop_na()
+
+modell_alternativ <- lmer(Bewertung ~ Wortstellung + Quantifikation + Kongruenz + Distanz + (1|CASE), zweifelsfall1_alternativ, REML= TRUE)
+
+summary(modell_alternativ)
+Anova(modell_alternativ)
+
+zweifelsfall1_alternativ$FittedBewertung <- fitted(modell_alternativ)
+```
+
+Eine Prüfung der Modellgüte in Bezug auf die zufälligen Faktoren (Rückwärtsselektion modulo AIC) deutet darauf hin, dass das Maximalmodell am besten abschneidet. Wir plotten nun die Daten mit dem zusätzlichen Faktor sowie die Güte des alternativen Modells.
+
+```{r}
+modell_alternativ_step <- stepcAIC(modell_alternativ, direction = "backward", trace = TRUE, data = zweifelsfall1_alternativ)
+
+modell_fit_zweifelsfall1_alternativ <-
+  ggplot(zweifelsfall1_alternativ, aes(x=Kongruenz, y=Bewertung)) + 
+  stat_summary(aes(color="observed"), fun.data=mean_cl_boot) +
+  stat_summary(aes(y=FittedBewertung, color="model"), fun.data=mean_cl_boot) + facet_grid(Wortstellung ~ Kongruenz ~ Distanz ~ Quantifikation) + xlab("Kongruenz") + ylab("Bewertung") + scale_color_discrete(name  ="Modellgüte", breaks=c("model", "observed"), labels=c("Modell", "Daten"))   
+
+alle_effekte_zweifelsfall1_alternativ <- 
+  ggplot(zweifelsfall1_alternativ, aes(x=Kongruenz, y=Bewertung, color=Wortstellung)) + stat_summary(fun.data=mean_cl_boot) + facet_wrap(~Distanz + Quantifikation) + xlab("Kongruenz") + ylab("Bewertung") + ylim(0, 4)
+
+modell_fit_zweifelsfall1_alternativ
+
+alle_effekte_zweifelsfall1_alternativ
+```
